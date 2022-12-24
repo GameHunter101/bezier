@@ -11,12 +11,12 @@ use ggez::{Context, GameResult};
 struct ControlPoint {
     pos_x: f32,
     pos_y: f32,
-    clicked: bool,
 }
 
 struct MainState {
     stroke_width: f32,
     bezier_resolution: u32,
+    max_bezier: usize,
     selected: Option<usize>,
     point_rad: f32,
     mouse_down: bool,
@@ -30,6 +30,7 @@ impl MainState {
         MainState {
             stroke_width: 2.0,
             bezier_resolution: 16,
+            max_bezier: 4,
             selected: None,
             point_rad: 5.0,
             mouse_down: false,
@@ -83,7 +84,7 @@ impl MainState {
                 group_controls_y.push(point_group_y[*i]);
             }
             let mut group_bezier = vec![];
-            for i in 0..self.bezier_resolution {
+            for i in 0..=self.bezier_resolution {
                 let bezier_point_x = MainState::bezier(
                     &group_controls_x,
                     (i as f32) / (self.bezier_resolution as f32),
@@ -101,19 +102,13 @@ impl MainState {
             self.bezier_points[selected_group] = group_bezier;
         }
     }
-}
 
-impl event::EventHandler<ggez::GameError> for MainState {
-    fn update(&mut self, _ctx: &mut Context) -> GameResult {
-        if self.selected != None {
-            MainState::recalculate_bezier(self, &self.selected.unwrap());
-        }
-        Ok(())
-    }
-
-    fn draw(&mut self, ctx: &mut Context) -> GameResult {
-        let mut canvas = graphics::Canvas::from_frame(ctx, Color::from([0.1, 0.2, 0.3, 1.0]));
-        for control in &self.control_points {
+    fn draw_control_points(
+        &mut self,
+        ctx: &mut Context,
+        canvas: &mut graphics::Canvas,
+    ) -> Result<(), ggez::GameError> {
+        Ok(for control in &self.control_points {
             let point_rad = 10.0;
             let point = graphics::Mesh::new_circle(
                 ctx,
@@ -124,20 +119,16 @@ impl event::EventHandler<ggez::GameError> for MainState {
                 Color::BLACK,
             )?;
             canvas.draw(&point, Vec2::new(0.0, 0.0));
-        }
-        for point in self.bezier_points.iter().flatten().collect::<Vec<_>>() {
-            let circle = graphics::Mesh::new_circle(
-                ctx,
-                DrawMode::Fill(FillOptions::default()),
-                *point,
-                self.point_rad,
-                0.5,
-                Color::RED,
-            )?;
-            canvas.draw(&circle, Vec2::new(0.0, 0.0));
-        }
+        })
+    }
+
+    fn draw_control_lines(
+        &mut self,
+        ctx: &mut Context,
+        canvas: &mut graphics::Canvas,
+    ) -> Result<(), ggez::GameError> {
         let control_len = self.control_points.len();
-        for i in 0..control_len {
+        Ok(for i in 0..control_len {
             if i + 1 != control_len {
                 let current_point = Point2 {
                     x: (&self.control_points)[i].pos_x,
@@ -155,7 +146,73 @@ impl event::EventHandler<ggez::GameError> for MainState {
                 )?;
                 canvas.draw(&line, Vec2::new(0.0, 0.0));
             }
+        })
+    }
+
+    fn draw_bezier_circles(
+        &mut self,
+        ctx: &mut Context,
+        canvas: &mut graphics::Canvas,
+    ) -> Result<(), ggez::GameError> {
+        Ok(
+            for point in self.bezier_points.iter().flatten().collect::<Vec<_>>() {
+                let circle = graphics::Mesh::new_circle(
+                    ctx,
+                    DrawMode::Fill(FillOptions::default()),
+                    *point,
+                    self.point_rad,
+                    0.5,
+                    Color::RED,
+                )?;
+                canvas.draw(&circle, Vec2::new(0.0, 0.0));
+            },
+        )
+    }
+
+    fn draw_bezier_max(
+        &mut self,
+        ctx: &mut Context,
+        canvas: &mut graphics::Canvas,
+    ) -> Result<(), ggez::GameError> {
+        let bounding_box = graphics::Mesh::new_rectangle(
+            ctx,
+            DrawMode::Fill(FillOptions::default()),
+            graphics::Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 100.0,
+                h: 100.0,
+            },
+            Color::CYAN,
+        )?;
+        canvas.draw(&bounding_box, Vec2::new(0.0, 0.0));
+        Ok(())
+    }
+}
+
+impl event::EventHandler<ggez::GameError> for MainState {
+    fn update(&mut self, _ctx: &mut Context) -> GameResult {
+        if self.selected != None {
+            MainState::recalculate_bezier(self, &self.selected.unwrap());
         }
+        Ok(())
+    }
+
+    fn draw(&mut self, ctx: &mut Context) -> GameResult {
+        let mut canvas = graphics::Canvas::from_frame(ctx, Color::from([0.1, 0.2, 0.3, 1.0]));
+
+        // Draws bezier max text box
+        self.draw_bezier_max(ctx, &mut canvas)?;
+
+        // Draws control points
+        self.draw_control_points(ctx, &mut canvas)?;
+
+        // Draws the lines between control points
+        self.draw_control_lines(ctx, &mut canvas)?;
+
+        // Draws the bezier dots
+        self.draw_bezier_circles(ctx, &mut canvas)?;
+
         canvas.finish(ctx)?;
         Ok(())
     }
@@ -180,12 +237,11 @@ impl event::EventHandler<ggez::GameError> for MainState {
             self.mouse_down = true;
             self.control_points.push(ControlPoint {
                 pos_x: x,
-                pos_y: y,
-                clicked: true,
+                pos_y: y
             });
             let last_group_index = &self.groups.len() - 1;
             let new_index = self.control_points.len() - 1;
-            if self.groups[last_group_index].len() == 4 {
+            if self.groups[last_group_index].len() == self.max_bezier {
                 self.groups.push(vec![new_index - 1, new_index]);
                 self.bezier_points.push(vec![]);
             } else {
@@ -195,35 +251,52 @@ impl event::EventHandler<ggez::GameError> for MainState {
             MainState::recalculate_bezier(self, &new_index);
         }
         if button == MouseButton::Middle {
-            // all of this needs to be rewritten
-            let mut deleting_point: Option<ControlPoint> = None;
             let mut deleting_index: Option<usize> = None;
             for i in 0..self.control_points.len() {
                 let point = &self.control_points[i];
                 if f32::abs(point.pos_x - x) <= 10.0 && f32::abs(point.pos_y - y) <= 10.0 {
-                    deleting_point = Some(*point);
                     deleting_index = Some(i);
                 }
             }
-            if let Some(i) = deleting_index {
-                let mut groups: Vec<Vec<usize>> = vec![];
-                for g in &self.groups {
-                    if g.contains(&i) {
-                        let pos = g.iter().position(|x| x == &i).unwrap();
-                        if pos > 0 && pos < g.len() - 1 {
-                            groups.push(g.to_vec());
+
+            if let Some(deleting_index) = deleting_index {
+                let deleting_index_groups = self
+                    .groups
+                    .iter()
+                    .enumerate()
+                    .filter(|(_i, g)| g.contains(&deleting_index))
+                    .map(|(i, _g)| i)
+                    .collect::<Vec<_>>();
+                for group in &deleting_index_groups {
+                    let updated_group_count = self
+                        .groups
+                        .iter()
+                        .enumerate()
+                        .filter(|(_i, g)| g.contains(&deleting_index))
+                        .map(|(i, _g)| i)
+                        .collect::<Vec<_>>()
+                        .len();
+                    let group_ref = &mut self.groups[*group];
+                    let first_element = group_ref[0];
+                    let deleting_element = self.control_points[deleting_index];
+                    let last_group_element_index = group_ref[group_ref.len() - 1];
+                    let last_group_element = self.control_points[last_group_element_index];
+                    self.control_points[last_group_element_index] = deleting_element;
+                    self.control_points[deleting_index] = last_group_element;
+                    if group_ref.len() >= 2 {
+                        group_ref.remove(group_ref.len() - 1);
+                    } else {
+                        self.groups.remove(*group);
+                        self.bezier_points.remove(*group);
+                        if self.groups.len() == 0 {
+                            self.groups.push(vec![]);
+                            self.bezier_points.push(vec![]);
                         }
                     }
-                }
-                for group in groups {
-                    let group_index = self.groups.iter().position(|x| *x==group).unwrap();
-                    let last_index = self.groups[group_index][group.len() - 1];
-                    let last_point = self.control_points[last_index];
-                    self.control_points[last_index] = deleting_point.unwrap();
-                    self.control_points[deleting_index.unwrap()] = last_point;
-                    self.groups[group_index].remove(last_index);
-                    self.control_points.remove(last_index);
-                    MainState::recalculate_bezier(self, &(i - 1));
+                    if updated_group_count == 1 {
+                        self.control_points.remove(last_group_element_index);
+                    }
+                    MainState::recalculate_bezier(self, &first_element);
                 }
             }
         }
@@ -272,14 +345,6 @@ pub fn main() -> GameResult {
                 .samples(conf::NumSamples::Four),
         );
     let (ctx, event_loop) = cb.build()?;
-
-    // remove the comment to see how physical mouse coordinates can differ
-    // from logical game coordinates when the screen coordinate system changes
-    // graphics::set_screen_coordinates(&mut ctx, Rect::new(20., 50., 2000., 1000.));
-
-    // alternatively, resizing the window also leads to screen coordinates
-    // and physical window size being out of sync
-
     let state = MainState::new();
     event::run(ctx, event_loop, state)
 }
