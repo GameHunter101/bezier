@@ -202,7 +202,7 @@ impl event::EventHandler<ggez::GameError> for MainState {
         let mut canvas = graphics::Canvas::from_frame(ctx, Color::from([0.1, 0.2, 0.3, 1.0]));
 
         // Draws bezier max text box
-        self.draw_bezier_max(ctx, &mut canvas)?;
+        // self.draw_bezier_max(ctx, &mut canvas)?;
 
         // Draws control points
         self.draw_control_points(ctx, &mut canvas)?;
