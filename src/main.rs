@@ -1,105 +1,122 @@
 //! Example that just prints out all the input events.
 
-use ggez::conf;
-use ggez::event::{self, MouseButton};
-use ggez::glam::*;
+use ggez::event::MouseButton;
 use ggez::graphics::{self, Color, DrawMode, FillOptions, StrokeOptions};
 use ggez::mint::Point2;
+use ggez::{conf, event};
+use ggez::{glam::*, input};
 use ggez::{Context, GameResult};
 
-#[derive(PartialEq, Debug, Clone, Copy)]
-struct ControlPoint {
-    pos_x: f32,
-    pos_y: f32,
+struct Bezier {
+    control_points: Vec<Point2<f32>>,
+    bezier_points: Vec<Vec<Point2<f32>>>,
+    groups: Vec<Vec<usize>>
+}
+
+impl Bezier {
+    fn calculate_bezier(&mut self,points: &[f32], t: f32) -> f32 {
+        // println!("{:?}",points);
+        if points.as_ref().len() == 1 {
+            return points.as_ref()[0];
+        } else {
+            return (1.0 - t)
+                * self.calculate_bezier(&points.as_ref()[0..points.as_ref().len() - 1], t)
+                + t * self.calculate_bezier(&points.as_ref()[1..points.as_ref().len()], t);
+        }
+    }
+    fn seperate_points_coords(&self,points: Vec<&Point2<f32>>) -> (Vec<f32>,Vec<f32>) {
+        let (x_vals,y_vals): (Vec<f32>,Vec<f32>) = points.iter().map(|p| (p.x,p.y)).unzip();
+        (x_vals,y_vals)
+    }
+    fn calculate_bezier_points(&mut self, point: usize) {
+        // Get all the groups that the point is part of
+        // loop over every one of the groups
+        // calculate_bezier for every point in the group
+        let mut group_contains_point:Vec<usize> = vec![point/4];
+        if (point as f32) %4.0 == 0.0 && point != 0 {
+            group_contains_point.push(point/4-1);
+        }
+        for group_index in group_contains_point {
+            let group_point_indices = &self.groups[group_index];
+            let group_points:Vec<&Point2<f32>> = group_point_indices.iter().map(|i| &self.control_points[*i]).collect();
+            let (x_vals,y_vals) = self.seperate_points_coords(group_points);
+            let bezier_resolution = 16;
+            let mut bezier_group:Vec<Point2<f32>> = vec![];
+            for i in 0..=bezier_resolution {
+                let bezier_point = Point2{
+                    x: self.calculate_bezier(&x_vals, (i as f32)/(bezier_resolution as f32)),
+                    y: self.calculate_bezier(&y_vals, (i as f32)/(bezier_resolution as f32))
+                };
+                bezier_group.push(bezier_point);
+            }
+            if self.bezier_points.len() == 0 || self.bezier_points.get(group_index) == None{
+                self.bezier_points.push(bezier_group);
+            } else {
+                self.bezier_points[group_index] = bezier_group;
+            }
+        }
+        /* let group: &Vec<Point2<f32>> = self.groups;
+
+        let (group_x_vals, group_y_vals): (Vec<f32>, Vec<f32>) =
+            group.iter().map(|p| (p.x, p.y)).unzip();
+        let bezier_resolution = 16;
+        for i in 0..=bezier_resolution {
+            let location = self.bezier_points.get(
+                17 * (group_ends.iter().position(|x| {
+                    let var_name = group[0];
+                    (*x).1 == group[0]
+                })).unwrap() + i,
+            );
+            let bezier_point = Point2 {
+                x: Bezier::calculate_bezier(&group_x_vals, (i as f32) / (bezier_resolution as f32)),
+                y: Bezier::calculate_bezier(&group_y_vals, (i as f32) / (bezier_resolution as f32)),
+            };
+            if let Some(_location) = location {
+                self.bezier_points[17 * group_index + i] = bezier_point
+            } else {
+                self.bezier_points.push(bezier_point);
+            }
+        } */
+    }
+    fn add_point(&mut self, x: f32, y: f32) {
+        let new_point = Point2 { x, y };
+        self.control_points.push(new_point);
+        if self.groups.len() > 0 {
+            let last_group_index = self.groups.len()-1;
+            let added_index = self.control_points.len()-1;
+            if (&self.groups[last_group_index]).len() < 4 {
+                self.groups[last_group_index].push(added_index);
+            } else {
+                self.groups.push(vec![added_index]);
+            }
+        } else {
+            self.groups.push(vec![0]);
+        };
+        self.calculate_bezier_points(self.control_points.len() - 1);
+    }
+    fn move_point(&mut self, point_index: usize, x: f32, y: f32) {
+        let point = &mut self.control_points[point_index];
+        point.x = x;
+        point.y = y;
+    }
 }
 
 struct MainState {
-    stroke_width: f32,
-    bezier_resolution: u32,
-    max_bezier: usize,
-    selected: Option<usize>,
-    point_rad: f32,
+    bezier: Bezier,
     mouse_down: bool,
-    control_points: Vec<ControlPoint>,
-    groups: Vec<Vec<usize>>,
-    bezier_points: Vec<Vec<Point2<f32>>>,
+    selected: Option<usize>,
 }
 
 impl MainState {
     fn new() -> MainState {
         MainState {
-            stroke_width: 2.0,
-            bezier_resolution: 16,
-            max_bezier: 4,
-            selected: None,
-            point_rad: 5.0,
+            bezier: Bezier {
+                control_points: vec![],
+                bezier_points: vec![],
+                groups: vec![]
+            },
             mouse_down: false,
-            control_points: vec![],
-            groups: vec![vec![]],
-            bezier_points: vec![vec![]],
-        }
-    }
-
-    fn bezier(points: &[f32], t: f32) -> f32 {
-        if points.as_ref().len() == 1 {
-            return points.as_ref()[0];
-        } else {
-            return (1.0 - t) * Self::bezier(&points.as_ref()[0..points.as_ref().len() - 1], t)
-                + t * Self::bezier(&points.as_ref()[1..points.as_ref().len()], t);
-        }
-    }
-    fn recalculate_bezier(&mut self, update_point: &usize) {
-        let (point_group_x, point_group_y): (Vec<f32>, Vec<f32>) = self
-            .control_points
-            .iter()
-            .map(|p| (p.pos_x, p.pos_y))
-            .unzip();
-        let mut selected: Vec<usize> = vec![];
-        let _filter = self
-            .groups
-            .iter()
-            .enumerate()
-            .filter(|(i, g)| {
-                if (**g).contains(&update_point) {
-                    selected.push(*i);
-                    return true;
-                }
-                return false;
-            })
-            .collect::<Vec<_>>();
-
-        self.bezier_points
-            .iter_mut()
-            .enumerate()
-            .for_each(|(i, p)| {
-                if selected.contains(&i) {
-                    *p = vec![];
-                }
-            });
-        for selected_group in selected {
-            let mut group_controls_x: Vec<f32> = vec![];
-            let mut group_controls_y: Vec<f32> = vec![];
-            for i in &self.groups[selected_group] {
-                group_controls_x.push(point_group_x[*i]);
-                group_controls_y.push(point_group_y[*i]);
-            }
-            let mut group_bezier = vec![];
-            for i in 0..=self.bezier_resolution {
-                let bezier_point_x = MainState::bezier(
-                    &group_controls_x,
-                    (i as f32) / (self.bezier_resolution as f32),
-                );
-                let bezier_point_y = MainState::bezier(
-                    &group_controls_y,
-                    (i as f32) / (self.bezier_resolution as f32),
-                );
-                let bezier_point = Point2 {
-                    x: bezier_point_x,
-                    y: bezier_point_y,
-                };
-                group_bezier.push(bezier_point);
-            }
-            self.bezier_points[selected_group] = group_bezier;
+            selected: None,
         }
     }
 
@@ -108,12 +125,12 @@ impl MainState {
         ctx: &mut Context,
         canvas: &mut graphics::Canvas,
     ) -> Result<(), ggez::GameError> {
-        Ok(for control in &self.control_points {
+        Ok(for control in &self.bezier.control_points {
             let point_rad = 10.0;
             let point = graphics::Mesh::new_circle(
                 ctx,
-                DrawMode::Stroke(StrokeOptions::default().with_line_width(self.stroke_width)),
-                [control.pos_x, control.pos_y],
+                DrawMode::Stroke(StrokeOptions::default().with_line_width(2.0)),
+                [control.x, control.y],
                 point_rad,
                 0.5,
                 Color::BLACK,
@@ -127,23 +144,19 @@ impl MainState {
         ctx: &mut Context,
         canvas: &mut graphics::Canvas,
     ) -> Result<(), ggez::GameError> {
-        let control_len = self.control_points.len();
+        let control_len = self.bezier.control_points.len();
         Ok(for i in 0..control_len {
             if i + 1 != control_len {
                 let current_point = Point2 {
-                    x: (&self.control_points)[i].pos_x,
-                    y: (&self.control_points)[i].pos_y,
+                    x: (&self.bezier.control_points)[i].x,
+                    y: (&self.bezier.control_points)[i].y,
                 };
                 let next_point = Point2 {
-                    x: (&self.control_points)[i + 1].pos_x,
-                    y: (&self.control_points)[i + 1].pos_y,
+                    x: (&self.bezier.control_points)[i + 1].x,
+                    y: (&self.bezier.control_points)[i + 1].y,
                 };
-                let line = graphics::Mesh::new_line(
-                    ctx,
-                    &[current_point, next_point],
-                    self.stroke_width,
-                    Color::BLACK,
-                )?;
+                let line =
+                    graphics::Mesh::new_line(ctx, &[current_point, next_point], 2.0, Color::BLACK)?;
                 canvas.draw(&line, Vec2::new(0.0, 0.0));
             }
         })
@@ -154,19 +167,19 @@ impl MainState {
         ctx: &mut Context,
         canvas: &mut graphics::Canvas,
     ) -> Result<(), ggez::GameError> {
-        Ok(
-            for point in self.bezier_points.iter().flatten().collect::<Vec<_>>() {
-                let circle = graphics::Mesh::new_circle(
-                    ctx,
-                    DrawMode::Fill(FillOptions::default()),
-                    *point,
-                    self.point_rad,
-                    0.5,
-                    Color::RED,
-                )?;
-                canvas.draw(&circle, Vec2::new(0.0, 0.0));
-            },
-        )
+        let bezier_points = &self.bezier.bezier_points;
+        let point_rad = 5.0;
+        Ok(for point in bezier_points.iter().flatten() {
+            let circle = graphics::Mesh::new_circle(
+                ctx,
+                DrawMode::Fill(FillOptions::default()),
+                *point,
+                point_rad,
+                0.5,
+                Color::RED,
+            )?;
+            canvas.draw(&circle, Vec2::new(0.0, 0.0));
+        })
     }
 
     fn draw_bezier_max(
@@ -188,8 +201,75 @@ impl MainState {
         canvas.draw(&bounding_box, Vec2::new(0.0, 0.0));
         Ok(())
     }
+    fn get_clicked_point(&mut self, x: f32, y: f32) {
+        for (i, point) in self.bezier.control_points.iter().enumerate() {
+            if f32::abs(point.x - x) <= 10.0 && f32::abs(point.y - y) <= 10.0 {
+                self.selected = Some(i);
+            }
+        }
+    }
 }
+impl event::EventHandler<ggez::GameError> for MainState {
+    fn update(&mut self, _ctx: &mut Context) -> GameResult {
+        Ok(())
+    }
+    fn draw(&mut self, ctx: &mut Context) -> GameResult {
+        let mut canvas = graphics::Canvas::from_frame(ctx, Color::from([0.2, 0.2, 0.2, 1.0]));
 
+        self.draw_bezier_circles(ctx, &mut canvas)?;
+        self.draw_control_points(ctx, &mut canvas)?;
+        self.draw_control_lines(ctx, &mut canvas)?;
+
+        canvas.finish(ctx)?;
+        Ok(())
+    }
+    fn mouse_button_down_event(
+        &mut self,
+        _ctx: &mut Context,
+        button: MouseButton,
+        x: f32,
+        y: f32,
+    ) -> Result<(), ggez::GameError> {
+        if button == MouseButton::Right {
+            self.mouse_down = true;
+            self.bezier.add_point(x, y);
+            self.get_clicked_point(x, y);
+        }
+        if button == MouseButton::Left {
+            self.mouse_down = true;
+            self.get_clicked_point(x, y);
+        }
+        Ok(())
+    }
+    fn mouse_button_up_event(
+        &mut self,
+        _ctx: &mut Context,
+        _button: MouseButton,
+        _x: f32,
+        _y: f32,
+    ) -> Result<(), ggez::GameError> {
+        self.mouse_down = false;
+        self.selected = None;
+        Ok(())
+    }
+    fn mouse_motion_event(
+        &mut self,
+        _ctx: &mut Context,
+        x: f32,
+        y: f32,
+        _dx: f32,
+        _dy: f32,
+    ) -> Result<(), ggez::GameError> {
+        if self.mouse_down {
+            if let Some(point) = self.selected {
+                self.bezier.move_point(point, x, y);
+                self.bezier.calculate_bezier_points(point);
+            }
+        }
+        Ok(())
+    }
+}
+/*
 impl event::EventHandler<ggez::GameError> for MainState {
     fn update(&mut self, _ctx: &mut Context) -> GameResult {
         if self.selected != None {
@@ -235,10 +315,8 @@ impl event::EventHandler<ggez::GameError> for MainState {
         }
         if button == MouseButton::Right {
             self.mouse_down = true;
-            self.control_points.push(ControlPoint {
-                pos_x: x,
-                pos_y: y
-            });
+            self.control_points
+                .push(ControlPoint { pos_x: x, pos_y: y });
             let last_group_index = &self.groups.len() - 1;
             let new_index = self.control_points.len() - 1;
             if self.groups[last_group_index].len() == self.max_bezier {
@@ -330,7 +408,7 @@ impl event::EventHandler<ggez::GameError> for MainState {
         }
         Ok(())
     }
-}
+}*/
 
 pub fn main() -> GameResult {
     let cb = ggez::ContextBuilder::new("Bezier Demo", "Lior Carmeli")
