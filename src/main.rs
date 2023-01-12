@@ -4,7 +4,7 @@ use ggez::event::MouseButton;
 use ggez::graphics::{self, Color, DrawMode, FillOptions, StrokeOptions};
 use ggez::mint::Point2;
 use ggez::{conf, event};
-use ggez::{glam::*, input};
+use ggez::{glam::*};
 use ggez::{Context, GameResult};
 
 struct Bezier {
@@ -15,7 +15,6 @@ struct Bezier {
 
 impl Bezier {
     fn calculate_bezier(&mut self, points: &[f32], t: f32) -> f32 {
-        // println!("{:?}",points);
         if points.as_ref().len() == 1 {
             return points.as_ref()[0];
         } else {
@@ -36,26 +35,31 @@ impl Bezier {
         let group_contains_point = self.get_groups_of_point(point);
         for group_index in group_contains_point {
             let group_point_indices = &self.groups[group_index];
-            let group_points: Vec<&Point2<f32>> = group_point_indices
-                .iter()
-                .map(|i| &self.control_points[*i])
-                .collect();
+            let group_points = self.indices_to_points(group_point_indices);
             let (x_vals, y_vals) = self.seperate_points_coords(group_points);
             let bezier_resolution = 16;
-            let mut bezier_group: Vec<Point2<f32>> = vec![];
+            let mut new_bezier_group: Vec<Point2<f32>> = vec![];
             for i in 0..=bezier_resolution {
                 let bezier_point = Point2 {
                     x: self.calculate_bezier(&x_vals, (i as f32) / (bezier_resolution as f32)),
                     y: self.calculate_bezier(&y_vals, (i as f32) / (bezier_resolution as f32)),
                 };
-                bezier_group.push(bezier_point);
+                new_bezier_group.push(bezier_point);
             }
             if self.bezier_points.len() == 0 || self.bezier_points.get(group_index) == None {
-                self.bezier_points.push(bezier_group);
+                self.bezier_points.push(new_bezier_group);
             } else {
-                self.bezier_points[group_index] = bezier_group;
+                self.bezier_points[group_index] = new_bezier_group;
             }
         }
+    }
+
+    fn indices_to_points(&self, points_indices: &Vec<usize>) -> Vec<&Point2<f32>> {
+        let points_refs: Vec<&Point2<f32>> = points_indices
+            .iter()
+            .map(|i| &self.control_points[*i])
+            .collect();
+        points_refs
     }
 
     fn get_groups_of_point(&mut self, point: usize) -> Vec<usize> {
@@ -92,19 +96,30 @@ impl Bezier {
         point.y = y;
     }
     fn delete_point(&mut self, point: usize) {
+        // If control_points length is 0 set groups and bezier_points to empty vector
+        // remove any instances of the last index in groups
+        // remove groups that are smaller than 2 elements
         self.control_points.remove(point);
+        if self.control_points.len() == 0 {
+            self.groups = vec![];
+            self.bezier_points = vec![];
+            return;
+        }
         let len = self.groups.len() - 1;
         self.groups[len].pop();
-        if point == 0 && self.control_points.len()==point {
-            self.bezier_points.remove(0);
-            self.groups.remove(0);
-        } else {
-            self.calculate_bezier_points(if point == self.control_points.len() {
-                point - 1
-            } else {
-                point
-            });
+        let mut reversed_groups:Vec<usize> = self.groups.iter().enumerate().map(|(i,_g)| i).collect();
+        reversed_groups.reverse();
+        for group in reversed_groups {
+            if self.groups[group].len() < 2 && group != 0 {
+                self.groups.remove(group);
+                self.bezier_points.remove(group);
+            }
         }
+        self.calculate_bezier_points(if point == self.control_points.len() {
+            point - 1
+        } else {
+            point
+        });
     }
 }
 
@@ -189,25 +204,6 @@ impl MainState {
         })
     }
 
-    fn draw_bezier_max(
-        &mut self,
-        ctx: &mut Context,
-        canvas: &mut graphics::Canvas,
-    ) -> Result<(), ggez::GameError> {
-        let bounding_box = graphics::Mesh::new_rectangle(
-            ctx,
-            DrawMode::Fill(FillOptions::default()),
-            graphics::Rect {
-                x: 0.0,
-                y: 0.0,
-                w: 100.0,
-                h: 100.0,
-            },
-            Color::CYAN,
-        )?;
-        canvas.draw(&bounding_box, Vec2::new(0.0, 0.0));
-        Ok(())
-    }
     fn get_clicked_point(&mut self, x: f32, y: f32) {
         for (i, point) in self.bezier.control_points.iter().enumerate() {
             if f32::abs(point.x - x) <= 10.0 && f32::abs(point.y - y) <= 10.0 {
@@ -282,146 +278,6 @@ impl event::EventHandler<ggez::GameError> for MainState {
         Ok(())
     }
 }
-/*
-impl event::EventHandler<ggez::GameError> for MainState {
-    fn update(&mut self, _ctx: &mut Context) -> GameResult {
-        if self.selected != None {
-            MainState::recalculate_bezier(self, &self.selected.unwrap());
-        }
-        Ok(())
-    }
-
-    fn draw(&mut self, ctx: &mut Context) -> GameResult {
-        let mut canvas = graphics::Canvas::from_frame(ctx, Color::from([0.1, 0.2, 0.3, 1.0]));
-
-        // Draws bezier max text box
-        // self.draw_bezier_max(ctx, &mut canvas)?;
-
-        // Draws control points
-        self.draw_control_points(ctx, &mut canvas)?;
-
-        // Draws the lines between control points
-        self.draw_control_lines(ctx, &mut canvas)?;
-
-        // Draws the bezier dots
-        self.draw_bezier_circles(ctx, &mut canvas)?;
-
-        canvas.finish(ctx)?;
-        Ok(())
-    }
-
-    fn mouse_button_down_event(
-        &mut self,
-        _ctx: &mut Context,
-        button: MouseButton,
-        x: f32,
-        y: f32,
-    ) -> GameResult {
-        if button == MouseButton::Left {
-            self.mouse_down = true;
-            for point in &self.control_points {
-                if f32::abs(point.pos_x - x) <= 10.0 && f32::abs(point.pos_y - y) <= 10.0 {
-                    self.selected =
-                        Some(self.control_points.iter().position(|x| x == point).unwrap());
-                }
-            }
-        }
-        if button == MouseButton::Right {
-            self.mouse_down = true;
-            self.control_points
-                .push(ControlPoint { pos_x: x, pos_y: y });
-            let last_group_index = &self.groups.len() - 1;
-            let new_index = self.control_points.len() - 1;
-            if self.groups[last_group_index].len() == self.max_bezier {
-                self.groups.push(vec![new_index - 1, new_index]);
-                self.bezier_points.push(vec![]);
-            } else {
-                self.groups[last_group_index].push(new_index);
-            }
-            self.selected = Some(new_index);
-            MainState::recalculate_bezier(self, &new_index);
-        }
-        if button == MouseButton::Middle {
-            let mut deleting_index: Option<usize> = None;
-            for i in 0..self.control_points.len() {
-                let point = &self.control_points[i];
-                if f32::abs(point.pos_x - x) <= 10.0 && f32::abs(point.pos_y - y) <= 10.0 {
-                    deleting_index = Some(i);
-                }
-            }
-
-            if let Some(deleting_index) = deleting_index {
-                let deleting_index_groups = self
-                    .groups
-                    .iter()
-                    .enumerate()
-                    .filter(|(_i, g)| g.contains(&deleting_index))
-                    .map(|(i, _g)| i)
-                    .collect::<Vec<_>>();
-                for group in &deleting_index_groups {
-                    let updated_group_count = self
-                        .groups
-                        .iter()
-                        .enumerate()
-                        .filter(|(_i, g)| g.contains(&deleting_index))
-                        .map(|(i, _g)| i)
-                        .collect::<Vec<_>>()
-                        .len();
-                    let group_ref = &mut self.groups[*group];
-                    let first_element = group_ref[0];
-                    let deleting_element = self.control_points[deleting_index];
-                    let last_group_element_index = group_ref[group_ref.len() - 1];
-                    let last_group_element = self.control_points[last_group_element_index];
-                    self.control_points[last_group_element_index] = deleting_element;
-                    self.control_points[deleting_index] = last_group_element;
-                    if group_ref.len() >= 2 {
-                        group_ref.remove(group_ref.len() - 1);
-                    } else {
-                        self.groups.remove(*group);
-                        self.bezier_points.remove(*group);
-                        if self.groups.len() == 0 {
-                            self.groups.push(vec![]);
-                            self.bezier_points.push(vec![]);
-                        }
-                    }
-                    if updated_group_count == 1 {
-                        self.control_points.remove(last_group_element_index);
-                    }
-                    MainState::recalculate_bezier(self, &first_element);
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn mouse_button_up_event(
-        &mut self,
-        _ctx: &mut Context,
-        _button: MouseButton,
-        _x: f32,
-        _y: f32,
-    ) -> GameResult {
-        self.mouse_down = false;
-        self.selected = None;
-        Ok(())
-    }
-
-    fn mouse_motion_event(
-        &mut self,
-        _ctx: &mut Context,
-        x: f32,
-        y: f32,
-        _xrel: f32,
-        _yrel: f32,
-    ) -> GameResult {
-        if self.mouse_down && self.selected != None {
-            let mut clicked = &mut self.control_points[self.selected.unwrap()];
-            clicked.pos_x = x;
-            clicked.pos_y = y;
-        }
-        Ok(())
-    }
-}*/
 
 pub fn main() -> GameResult {
     let cb = ggez::ContextBuilder::new("Bezier Demo", "Lior Carmeli")
